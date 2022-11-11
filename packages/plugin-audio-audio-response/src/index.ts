@@ -49,6 +49,8 @@ class AudioAudioResponsePlugin implements JsPsychPlugin<Info> {
     // data saving
     var trial_data = {
       stimulus: trial.stimulus,
+      prompt: trial.prompt,
+      t: [],
       mic_signal: [],
       stim_signal: [],
       fs: null,
@@ -69,19 +71,22 @@ class AudioAudioResponsePlugin implements JsPsychPlugin<Info> {
         },
       });
 
-      let streamNode = context.createMediaStreamSource(this.stream);
+      this.mediaStreamNode = context.createMediaStreamSource(this.stream);
 
-      return streamNode;
+      return true;
     };
 
     const setupWorklets = async () => {
-      await context.audioWorklet.addModule("js/recorderWorkletProcessor.js");
+      // NOTE: This file needs to be added to assets to work! What's the proper way to do this?
+      await context.audioWorklet.addModule("assets/recorderWorkletProcessor.js");
       this.stimProcessor = new AudioWorkletNode(context, "recorder-worklet");
       this.micProcessor = new AudioWorkletNode(context, "recorder-worklet");
 
       this.stimProcessor.port.onmessage = (event) => {
         if (event.data.eventType === "data") {
           event.data.audioBuffer.map((x) => trial_data.stim_signal.push(x));
+          // Note that this is called after the message is received so is only an indication
+          trial_data.t.push(context.currentTime);
         } else if (event.data.eventType === "stop") {
           endTrial();
         }
@@ -92,16 +97,16 @@ class AudioAudioResponsePlugin implements JsPsychPlugin<Info> {
           event.data.audioBuffer.map((x) => trial_data.mic_signal.push(x));
         }
       };
+      return true;
     };
 
     const startTrial = async () => {
+      let buffer = await this.jsPsych.pluginAPI.getAudioBuffer(trial.stimulus);
       this.audio = context.createBufferSource();
-      this.audio.buffer = this.jsPsych.pluginAPI.getAudioBuffer(trial.stimulus);
-      this.mediaStreamNode = getMic();
+      this.audio.buffer = buffer;
 
+      await getMic();
       await setupWorklets();
-      await this.audio.buffer;
-      await this.mediaStreamNode;
 
       this.audio.connect(this.stimProcessor);
       this.stimProcessor.connect(context.destination);
@@ -114,12 +119,15 @@ class AudioAudioResponsePlugin implements JsPsychPlugin<Info> {
       const start_time = init_time + padding;
       const end_time = start_time + trial.trial_duration / 1000;
 
+      display_element.innerHTML = trial.prompt;
       this.micProcessor.parameters.get("isRecording").setValueAtTime(1, start_time);
       this.stimProcessor.parameters.get("isRecording").setValueAtTime(1, start_time);
       this.micProcessor.parameters.get("isRecording").setValueAtTime(0, end_time);
       this.stimProcessor.parameters.get("isRecording").setValueAtTime(0, end_time);
       this.audio.start(start_time);
     };
+
+    startTrial();
   }
 }
 
